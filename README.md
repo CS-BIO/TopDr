@@ -27,3 +27,10 @@ The main Python packages required to run the code are:
 To run the code, simply execute:
 
 - python TorDr.py
+
+## Contact
+
+If you have any questions regarding the code, please contact the first author:
+
+Cong Shen
+📧 Email: cshen@amss.ac.cn
