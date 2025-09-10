@@ -1,0 +1,208 @@
+import os
+import time
+import random
+import argparse
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.autograd import Variable
+from sklearn.metrics import r2_score
+from scipy.stats import pearsonr
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+from utils_ import multiomics_data
+from model import MultiDeep
+import torch.utils.data as Dataset
+
+# Training settings
+parser = argparse.ArgumentParser()
+parser.add_argument('--seed', type=int, default=0, help='Random seed.')
+parser.add_argument('--epochs', type=int, default=50, help='Number of epochs to train.')
+parser.add_argument('--lr', type=float, default=0.0001, help='Initial learning rate.')
+parser.add_argument('--batch', type=int, default=128, help='Number of batch size')
+parser.add_argument('--hidden', type=list, default=[[64,16,16],[64,16,16]], help='Number of hidden units.')
+parser.add_argument('--nb_heads', type=int, default=6, help='Number of head attentions.')
+parser.add_argument('--alpha', type=float, default=0.2, help='Alpha for the leaky_relu.')
+parser.add_argument('--patience', type=int, default=10, help='Patience')
+
+args = parser.parse_args()
+
+random.seed(args.seed)       
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+
+if torch.cuda.is_available():
+    device = torch.device("cuda:0")
+    torch.cuda.manual_seed(args.seed)
+else:
+    device = torch.device("cpu")
+# device = torch.device("cpu")   
+print("=========,",device)
+    
+if not os.path.isfile('processed_data/sample_set.pt'):
+    # Load data
+    cell_adj_matrix, cell_feat_matrix, cell_node_set, drug_adj_matrix,drug_feat_matrix, drug_node_set, sample_set = multiomics_data()
+    torch.save(cell_adj_matrix,'processed_data/cell_adj_matrix.pt')
+    torch.save(cell_feat_matrix,'processed_data/cell_feat_matrix.pt')
+    torch.save(cell_node_set,'processed_data/cell_node_set.pt')
+    torch.save(drug_adj_matrix,'processed_data/drug_adj_matrix.pt')
+    torch.save(drug_feat_matrix,'processed_data/drug_feat_matrix.pt')
+    torch.save(drug_node_set,'processed_data/drug_node_set.pt')
+    torch.save(sample_set,'processed_data/sample_set.pt')
+
+cell_adj_matrix = torch.load('processed_data/cell_adj_matrix.pt')
+cell_feat_matrix = torch.load('processed_data/cell_feat_matrix.pt')
+cell_node_set = torch.load('processed_data/cell_node_set.pt')
+drug_adj_matrix = torch.load('processed_data/drug_adj_matrix.pt')
+drug_feat_matrix = torch.load('processed_data/drug_feat_matrix.pt')
+drug_node_set = torch.load('processed_data/drug_node_set.pt')
+sample_set = torch.load('processed_data/sample_set.pt')
+
+ncell,  ndrug = [], []
+ncellfeat, ndrugfeat = [], []
+for i in range(len(cell_feat_matrix)):
+    temp_ncell, temp_ndrug = [], []
+    temp_ncellfeat, temp_ndrugfeat = [], []
+    for j in range(len(cell_feat_matrix[i])):
+        temp_ncell.append(cell_feat_matrix[i][j].shape[0])
+        temp_ndrug.append(drug_feat_matrix[i][j].shape[0])
+        
+        temp_ncellfeat.append(cell_feat_matrix[i][j].shape[1])
+        temp_ndrugfeat.append(drug_feat_matrix[i][j].shape[1])
+        
+    ncell.append(temp_ncell)
+    ndrug.append(temp_ndrug)
+    
+    ncellfeat.append(temp_ncellfeat)
+    ndrugfeat.append(temp_ndrugfeat)
+
+# Model and optimizer 
+model = MultiDeep(ncell = ncell, ndrug = ndrug,  ncellfeat = ncellfeat,  ndrugfeat = ndrugfeat,  nhid=args.hidden, nheads=args.nb_heads, alpha=args.alpha)
+optimizer = optim.Adam(model.parameters(), lr=args.lr) 
+
+loss_func = nn.MSELoss()
+loss_func.to(device)
+best_value = [1000, 1]
+MHAresult = []
+
+
+def train(epoch, index_tra, y_tra, index_val, y_val):
+    t = time.time()
+    tra_dataset = Dataset.TensorDataset(index_tra, y_tra)
+    train_dataset = Dataset.DataLoader(tra_dataset, batch_size=args.batch, shuffle=True, pin_memory=True)
+    model.train()
+    for index_trian, y_train in train_dataset:
+        y_train = y_train.to(device)
+        y_tpred = model(cell_adj_matrix, cell_feat_matrix, cell_node_set, drug_adj_matrix, drug_feat_matrix, drug_node_set, index_trian.numpy().astype(int), device) 
+        loss_train = loss_func(y_tpred, y_train)
+        optimizer.zero_grad()
+        loss_train.backward() 
+        optimizer.step() 
+        
+    model.eval()
+    loss_valid, RMSE_valid, PCC_valid, R2_valid = [], [], [], []
+    val_dataset = Dataset.TensorDataset(index_val, y_val)
+    valid_dataset = Dataset.DataLoader(val_dataset, batch_size=args.batch, shuffle=True, pin_memory=True)
+    pred_valid, true_valid = [], []
+    
+    for index_valid, y_valid in valid_dataset:
+        y_valid = y_valid.to(device)
+        y_vpred = model(cell_adj_matrix, cell_feat_matrix, cell_node_set, drug_adj_matrix, drug_feat_matrix, drug_node_set, index_valid.numpy().astype(int), device)  
+        pred_valid.extend( y_vpred.cpu().detach().numpy())
+        true_valid.extend( y_valid.cpu().detach().numpy())
+        
+    loss_valid = mean_squared_error(true_valid, pred_valid)
+    RMSE_valid = np.sqrt(loss_valid)
+    MAE_valid = mean_absolute_error(true_valid, pred_valid)
+    PCC_valid = pearsonr(true_valid, pred_valid)[0]
+    R2_valid = r2_score(true_valid, pred_valid)
+    
+    pred_train = y_tpred.cpu().detach().numpy()
+    true_train = y_train.cpu().detach().numpy()
+    RMSE_train = np.sqrt(loss_train.item(), out=None)
+    MAE_train = mean_absolute_error(true_train, pred_train)
+    R2_train = r2_score(true_train, pred_train)
+    PCC_train = pearsonr(true_train, pred_train)[0]
+                
+    print('Epoch: {:04d}'.format(epoch+1),
+                'loss_train: {:.4f}'.format(loss_train.item()),
+                'RMSE_train: {:.4f}'.format(RMSE_train),
+                'MAE_train: {:.4f}'.format(MAE_train),
+                'PCC_train: {:.4f}'.format(PCC_train),
+                'R2_train: {:.4f}'.format(R2_train),
+                '\t loss_valid: {:.4f}'.format(loss_valid),
+                'RMSE_valid: {:.4f}'.format(RMSE_valid),
+                'MAE_valid: {:.4f}'.format(MAE_valid),
+                'PCC_valid: {:.4f}'.format(PCC_valid),
+                'R2_valid: {:.4f}'.format(R2_valid),
+                'time: {:.4f}s'.format(time.time() - t))
+        
+    if RMSE_valid <= best_value[0]:
+        best_value[0] = RMSE_valid
+        best_value[1] = epoch+1
+        torch.save(model.state_dict(),"./output/models.pkl")
+    return best_value[1], RMSE_valid
+
+def compute_test(index_test, y_test):
+    model.eval()
+    loss_test, PCC_test, RMSE_test, R2_test = [], [], [], []
+    pred_test, true_test = [], []
+    dataset = Dataset.TensorDataset(index_test, y_test)
+    test_dataset = Dataset.DataLoader(dataset, batch_size=args.batch, shuffle=True, pin_memory=True)
+    for index_test, y_test in test_dataset:
+        y_test = y_test.to(device)
+        y_pred = model(cell_adj_matrix, cell_feat_matrix, cell_node_set, drug_adj_matrix, drug_feat_matrix, drug_node_set, index_test.numpy().astype(int), device)  
+        loss_test = loss_func(y_pred, y_test)
+        pred_test.extend(y_pred.cpu().detach().numpy())
+        true_test.extend(y_test.cpu().detach().numpy())
+    
+    loss_test = mean_squared_error(true_test, pred_test)
+    RMSE_test = np.sqrt(loss_test)
+    MAE_test = mean_absolute_error(true_test, pred_test)
+    PCC_test = pearsonr(true_test, pred_test)[0]
+    R2_test = r2_score(true_test, pred_test)
+
+    with open("MATDRP1", 'a') as f:
+        f.write(str(RMSE_test) + " " + str(MAE_test) + " " +str(PCC_test) + " " + str(R2_test) + "\n")
+    
+    print("Test set results:",
+          "loss= {:.4f}".format(loss_test),
+          "RMSE= {:.4f}".format(RMSE_test),
+          'MAE= {:.4f}'.format(MAE_test),
+          "PCC_test= {:.4f}".format(PCC_test),
+          "R2_test= {:.4f}\n".format(R2_test))
+
+# Train model
+
+t_total = time.time()
+train_set, test_set = train_test_split(np.arange(sample_set.shape[0]), test_size=0.1, random_state=np.random.randint(0,1000)) 
+train_set, valid_set = train_test_split(train_set, test_size=1/9, random_state=np.random.randint(0,1000))
+    
+index_train, y_train = sample_set[train_set[:], :2], sample_set[train_set[:], 2]
+index_valid, y_valid = sample_set[valid_set[:], :2], sample_set[valid_set[:], 2]
+index_test, y_test = sample_set[test_set[:], :2], sample_set[test_set[:], 2]
+y_train, y_test, y_valid = Variable(y_train, requires_grad=True), Variable(y_test, requires_grad=True), Variable(y_valid, requires_grad=True)
+    
+model.to(device)
+pcc_valid = [0]
+bad_counter = 0
+for epoch in range(args.epochs):
+    best_epoch, avg_pcc_valid = train(epoch, index_train, y_train, index_valid, y_valid)
+    pcc_valid.append(avg_pcc_valid)
+        
+    if abs(pcc_valid[-1]-pcc_valid[-2])<0.005:
+        bad_counter += 1
+    else:
+        bad_counter = 0
+            
+    if bad_counter >= args.patience:
+        break
+        
+print("Optimization Finished. Total time: {:.4f}s".format(time.time() - t_total))
+print('Loading {}th epoch'.format(best_epoch))
+model.load_state_dict(torch.load('./output/models.pkl'))
+# Testing
+compute_test(index_test, y_test)
