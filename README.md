@@ -1,4 +1,4 @@
-# TorDr: Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction
+# TopDr: Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction
 
 This repository provides the official implementation of the paper **"Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction"**.  
 
