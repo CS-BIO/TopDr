@@ -26,7 +26,7 @@ The main Python packages required to run the code are:
 
 To run the code, simply execute:
 
-- python TorDr.py
+- python TopDr.py
 
 ## Contact
 
