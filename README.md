@@ -1,6 +1,6 @@
-# TorDr: [Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction]
+# TorDr: Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction
 
-This repository provides the official implementation of the paper **"[Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction]"**.  
+This repository provides the official implementation of the paper **"Topology-Aware Deep Learning on Higher-Order Structures for Drug Response Prediction"**.  
 
 Below is the overall framework of the paper:  
 
@@ -22,4 +22,8 @@ The main Python packages required to run the code are:
 - [RDKit] ≥ 2025.3   
 - [matplotlib] ≥ 3.9  
 
+## Usage
 
+To run the code, simply execute:
+
+- python TorDr.py
